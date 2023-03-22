@@ -7,8 +7,10 @@ inputs:
     required: true
   issue-message:
     description: 'Comment to post on an individual''s first issue'
-  pr-message:
+  pr-opened-message:
     description: 'Comment to post on an individual''s first pull request'
+  pr-merged-message:
+    description: 'Comment to post on an individual''s first pull request after it has been merged and closed'
 runs:
   using: 'docker'
   image: 'Dockerfile'

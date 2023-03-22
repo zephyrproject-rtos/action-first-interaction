@@ -4,8 +4,9 @@ import * as github from '@actions/github';
 async function run() {
   try {
     const issueMessage: string = core.getInput('issue-message');
-    const prMessage: string = core.getInput('pr-message');
-    if (!issueMessage && !prMessage) {
+    const prOpenedMessage: string = core.getInput('pr-opened-message');
+    const prMergedMessage: string = core.getInput('pr-merged-message');
+    if (!issueMessage && !prOpenedMessage && !prMergedMessage) {
       throw new Error(
         'Action must have at least one of issue-message or pr-message set'
       );
@@ -16,71 +17,80 @@ async function run() {
     );
     const context = github.context;
 
-    if (context.payload.action !== 'opened') {
-      console.log('No issue or PR was opened, skipping');
-      return;
-    }
-
     // Do nothing if its not a pr or issue
     const isIssue: boolean = !!context.payload.issue;
-    if (!isIssue && !context.payload.pull_request) {
+    const isPR: boolean = !!context.payload.pull_request;
+    if (!isIssue && !isPR) {
       console.log(
         'The event that triggered this action was not a pull request or issue, skipping.'
       );
       return;
     }
 
+    if (isIssue && context.payload.action !== 'opened') {
+      console.log('No issue was opened, skipping');
+      return;
+    }
+    if (isPR && (context.payload.action !== 'opened' && context.payload.action !== 'closed')) {
+      console.log('No PR was opened or closed, skipping');
+      return;
+    }
+    
     // Do nothing if its not their first contribution
-    console.log('Checking if its the users first contribution');
+    console.log('Checking if its the user\'s first contribution');
     if (!context.payload.sender) {
       throw new Error('Internal error, no sender provided by GitHub');
     }
     const sender: string = context.payload.sender!.login;
     const issue: {owner: string; repo: string; number: number} = context.issue;
+
     let firstContribution: boolean = false;
     if (isIssue) {
       firstContribution = await isFirstIssue(
         client,
-        issue.owner,
-        issue.repo,
         sender,
         issue.number
       );
     } else {
       firstContribution = await isFirstPull(
         client,
-        issue.owner,
-        issue.repo,
         sender,
-        issue.number
+        issue.number,
+        context.payload.action === 'closed'
       );
     }
-    if (!firstContribution) {
-      console.log('Not the users first contribution');
-      return;
-    }
 
-    // Do nothing if no message set for this type of contribution
-    const message: string = isIssue ? issueMessage : prMessage;
-    if (!message) {
-      console.log('No message provided for this type of contribution');
+    if (!firstContribution) {
+      console.log('Not the user\'s first contribution');
       return;
     }
 
     const issueType: string = isIssue ? 'issue' : 'pull request';
     // Add a comment to the appropriate place
-    console.log(`Adding message: ${message} to ${issueType} ${issue.number}`);
-    if (isIssue) {
+    if (isIssue && issueMessage) {
+      console.log(`Adding message: ${issueMessage} to ${issueType} ${issue.number}`);
       await client.rest.issues.createComment({
-        owner: issue.owner,
-        repo: issue.repo,
+        ...context.repo,
         issue_number: issue.number,
-        body: message
+        body: issueMessage
       });
     } else {
+      // Get the pull request details
+      const { data: pr } = await client.rest.pulls.get({
+        ...context.repo,
+        pull_number: issue.number
+      });
+
+      if(context.payload.action === 'closed' && !pr.merged) {
+        console.log('PR was closed without merging, skipping');
+        return;
+      }
+
+      const message = pr.merged ? prMergedMessage : prOpenedMessage;
+
+      console.log(`Adding message: ${message} to ${issueType} ${issue.number}`);
       await client.rest.pulls.createReview({
-        owner: issue.owner,
-        repo: issue.repo,
+        ...context.repo,
         pull_number: issue.number,
         body: message,
         event: 'COMMENT'
@@ -94,14 +104,11 @@ async function run() {
 
 async function isFirstIssue(
   client: ReturnType<typeof github.getOctokit>,
-  owner: string,
-  repo: string,
   sender: string,
   curIssueNumber: number
 ): Promise<boolean> {
   const {status, data: issues} = await client.rest.issues.listForRepo({
-    owner: owner,
-    repo: repo,
+    ...github.context.repo,
     creator: sender,
     state: 'all'
   });
@@ -123,20 +130,19 @@ async function isFirstIssue(
   return true;
 }
 
-// No way to filter pulls by creator
+// It's someone's "first" PR if it's the first PR they've opened, 
+// or if it's their first closed PR that's been merged.
 async function isFirstPull(
   client: ReturnType<typeof github.getOctokit>,
-  owner: string,
-  repo: string,
   sender: string,
   curPullNumber: number,
+  closed: boolean,
   page: number = 1
 ): Promise<boolean> {
   // Provide console output if we loop for a while.
   console.log('Checking...');
   const {status, data: pulls} = await client.rest.pulls.list({
-    owner: owner,
-    repo: repo,
+    ...github.context.repo,
     per_page: 100,
     page: page,
     state: 'all'
@@ -152,17 +158,26 @@ async function isFirstPull(
 
   for (const pull of pulls) {
     const login = pull.user?.login;
-    if (login === sender && pull.number < curPullNumber) {
-      return false;
+
+    if(!closed) {
+      // If the PR is open, we only care if it's the first PR they've opened.
+      if (login === sender && pull.number < curPullNumber) {
+        return false;
+      }
+    } else {
+      // If the PR is closed, we need to check if it's the first PR of theirs that's been merged.
+      // In other words, are there PRs from them other than "currPullNumber" that are merged.
+      if (login === sender && pull.merged_at!==null && pull.number != curPullNumber) {
+        return false;
+      }
     }
   }
 
   return await isFirstPull(
     client,
-    owner,
-    repo,
     sender,
     curPullNumber,
+    closed,
     page + 1
   );
 }
