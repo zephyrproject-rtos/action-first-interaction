@@ -52,7 +52,7 @@ async function run() {
         issue.number
       );
     } else {
-      firstContribution = await isFirstPull(
+      firstContribution = await isFirstOpenedOrMergedPR(
         client,
         sender,
         issue.number,
@@ -75,18 +75,7 @@ async function run() {
         body: issueMessage
       });
     } else {
-      // Get the pull request details
-      const { data: pr } = await client.rest.pulls.get({
-        ...context.repo,
-        pull_number: issue.number
-      });
-
-      if(context.payload.action === 'closed' && !pr.merged) {
-        console.log('PR was closed without merging, skipping');
-        return;
-      }
-
-      const message = pr.merged ? prMergedMessage : prOpenedMessage;
+      const message = (context.payload.action === 'closed') ? prMergedMessage : prOpenedMessage;
 
       console.log(`Adding message: ${message} to ${issueType} ${issue.number}`);
       await client.rest.pulls.createReview({
@@ -130,56 +119,38 @@ async function isFirstIssue(
   return true;
 }
 
-// It's someone's "first" PR if it's the first PR they've opened, 
-// or if it's their first closed PR that's been merged.
-async function isFirstPull(
+async function isFirstOpenedOrMergedPR(
   client: ReturnType<typeof github.getOctokit>,
   sender: string,
   curPullNumber: number,
-  closed: boolean,
-  page: number = 1
+  closed: boolean
 ): Promise<boolean> {
-  // Provide console output if we loop for a while.
-  console.log('Checking...');
-  const {status, data: pulls} = await client.rest.pulls.list({
+  // get the PR's details
+  const {status: getPRStatus, data: pr} = await client.rest.pulls.get({
     ...github.context.repo,
-    per_page: 100,
-    page: page,
-    state: 'all'
+    pull_number: curPullNumber
   });
 
-  if (status !== 200) {
+  if (getPRStatus !== 200) {
     throw new Error(`Received unexpected API status code ${status}`);
   }
 
-  if (pulls.length === 0) {
-    return true;
+  let query = `repo:${github.context.repo.owner}/${github.context.repo.repo} type:pr author:${sender}`;
+  if (closed) {
+  let query = `repo:${github.context.repo.owner}/${github.context.repo.repo} type:pr author:${sender}`;
+    if(!pr.merged) return false;
+    query += ` closed:<=${pr.closed_at} is:merged`;
+  } else {
+    query += ` created:<=${pr.created_at}`;
+  }
+  const {status: searchStatus, data: searchResults} = await client.rest.search.issuesAndPullRequests({ q: query });
+   
+  if (searchStatus !== 200) {
+    throw new Error(`Received unexpected API status code ${status}`);
   }
 
-  for (const pull of pulls) {
-    const login = pull.user?.login;
-
-    if(!closed) {
-      // If the PR is open, we only care if it's the first PR they've opened.
-      if (login === sender && pull.number < curPullNumber) {
-        return false;
-      }
-    } else {
-      // If the PR is closed, we need to check if it's the first PR of theirs that's been merged.
-      // In other words, are there PRs from them other than "currPullNumber" that are merged.
-      if (login === sender && pull.merged_at!==null && pull.number != curPullNumber) {
-        return false;
-      }
-    }
-  }
-
-  return await isFirstPull(
-    client,
-    sender,
-    curPullNumber,
-    closed,
-    page + 1
-  );
+  // If current PR is the user's first to be created or merged, there should be exactly one result
+  return searchResults.total_count === 1;
 }
 
 run();
