@@ -96,27 +96,26 @@ async function isFirstIssue(
   sender: string,
   curIssueNumber: number
 ): Promise<boolean> {
-  const {status, data: issues} = await client.rest.issues.listForRepo({
+  // get the issue details
+  const {status: getIssueStatus, data: issue} = await client.rest.issues.get({
     ...github.context.repo,
-    creator: sender,
-    state: 'all'
+    issue_number: curIssueNumber
   });
 
-  if (status !== 200) {
-    throw new Error(`Received unexpected API status code ${status}`);
+  if (getIssueStatus !== 200) {
+    throw new Error(`Received unexpected API status code ${getIssueStatus}`);
   }
 
-  if (issues.length === 0) {
-    return true;
+  let query = `repo:${github.context.repo.owner}/${github.context.repo.repo} author:${sender} created:<=${issue.created_at} type:issue`;
+
+  const {status: searchStatus, data: searchResults} = await client.rest.search.issuesAndPullRequests({ q: query });
+   
+  if (searchStatus !== 200) {
+    throw new Error(`Received unexpected API status code ${searchStatus}`);
   }
 
-  for (const issue of issues) {
-    if (issue.number < curIssueNumber && !issue.pull_request) {
-      return false;
-    }
-  }
-
-  return true;
+  // If current issue is the user's first, there should be exactly one result
+  return searchResults.total_count === 1;
 }
 
 async function isFirstOpenedOrMergedPR(
