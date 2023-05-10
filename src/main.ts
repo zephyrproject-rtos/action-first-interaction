@@ -58,23 +58,17 @@ async function run() {
     
     // Do nothing if its not their first contribution
     console.log('Checking if its the user\'s first contribution');
-    if (!context.payload.sender) {
-      throw new Error('Internal error, no sender provided by GitHub');
-    }
-    const sender: string = context.payload.sender!.login;
     const issue: {owner: string; repo: string; number: number} = context.issue;
 
     let firstContribution: boolean = false;
     if (isIssue) {
       firstContribution = await isFirstIssue(
         client,
-        sender,
         issue.number
       );
     } else {
       firstContribution = await isFirstOpenedOrMergedPR(
         client,
-        sender,
         issue.number,
         context.payload.action === 'closed'
       );
@@ -113,7 +107,6 @@ async function run() {
 
 async function isFirstIssue(
   client: ReturnType<typeof github.getOctokit>,
-  sender: string,
   curIssueNumber: number
 ): Promise<boolean> {
   // get the issue details
@@ -126,7 +119,7 @@ async function isFirstIssue(
     throw new Error(`Received unexpected API status code ${getIssueStatus}`);
   }
 
-  let query = `repo:${github.context.repo.owner}/${github.context.repo.repo} author:${sender} created:<=${issue.created_at} type:issue`;
+  let query = `repo:${github.context.repo.owner}/${github.context.repo.repo} author:${issue.user?.login} created:<=${issue.created_at} type:issue`;
 
   const {status: searchStatus, data: searchResults} = await client.rest.search.issuesAndPullRequests({ q: query });
    
@@ -140,7 +133,6 @@ async function isFirstIssue(
 
 async function isFirstOpenedOrMergedPR(
   client: ReturnType<typeof github.getOctokit>,
-  sender: string,
   curPullNumber: number,
   closed: boolean
 ): Promise<boolean> {
@@ -154,9 +146,8 @@ async function isFirstOpenedOrMergedPR(
     throw new Error(`Received unexpected API status code ${status}`);
   }
 
-  let query = `repo:${github.context.repo.owner}/${github.context.repo.repo} type:pr author:${sender}`;
+  let query = `repo:${github.context.repo.owner}/${github.context.repo.repo} type:pr author:${pr.user?.login}`;
   if (closed) {
-  let query = `repo:${github.context.repo.owner}/${github.context.repo.repo} type:pr author:${sender}`;
     if(!pr.merged) return false;
     query += ` closed:<=${pr.closed_at} is:merged`;
   } else {
