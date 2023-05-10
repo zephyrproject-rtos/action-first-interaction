@@ -1,5 +1,7 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
+import { retry } from '@octokit/plugin-retry';
+import { throttling } from '@octokit/plugin-throttling';
 
 async function run() {
   try {
@@ -13,7 +15,25 @@ async function run() {
     }
     // Get client and context
     const client = github.getOctokit(
-      core.getInput('repo-token', {required: true})
+      core.getInput('repo-token', { required: true }),
+      {
+        request: { retries: 5 },
+        throttle: {
+          onSecondaryRateLimit: (retryAfter, options) => {
+            console.warn(`Secondary rate limit reached for request ${options.method} ${options.url}.`,
+              `Will retry in ${retryAfter} seconds.`);
+            return true;
+          },
+          onRateLimit: (retryAfter, options, octokit, retryCount) => {
+            console.warn(`Rate limit reached for request ${options.method} ${options.url}.`,
+              `Will retry in ${retryAfter} seconds.`);
+            if(retryCount < 3) {
+              return true;
+            }
+          }
+        }
+      },
+      retry, throttling
     );
     const context = github.context;
 
