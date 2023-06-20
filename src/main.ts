@@ -79,26 +79,19 @@ async function run() {
       return;
     }
 
-    const issueType: string = isIssue ? 'issue' : 'pull request';
-    // Add a comment to the appropriate place
+    let message;
     if (isIssue && issueMessage) {
-      console.log(`Adding message: ${issueMessage} to ${issueType} ${issue.number}`);
-      await client.rest.issues.createComment({
-        ...context.repo,
-        issue_number: issue.number,
-        body: issueMessage
-      });
+      message = issueMessage;
     } else {
-      const message = (context.payload.action === 'closed') ? prMergedMessage : prOpenedMessage;
-
-      console.log(`Adding message: ${message} to ${issueType} ${issue.number}`);
-      await client.rest.pulls.createReview({
-        ...context.repo,
-        pull_number: issue.number,
-        body: message,
-        event: 'COMMENT'
-      });
+      message = (context.payload.action === 'closed') ? prMergedMessage : prOpenedMessage;
     }
+    
+    console.log(`Adding message: ${message} to ${(isIssue ? 'issue' : 'pull request')} ${issue.number}`);
+    await client.rest.issues.createComment({
+      ...context.repo,
+      issue_number: issue.number,
+      body: message
+    });
   } catch (error) {
     core.setFailed((error as any).message);
     return;
